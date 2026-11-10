@@ -73,6 +73,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); margin: .2rem 0;
 .chk { display: flex; gap: .5rem; align-items: center; font-size: .92rem; color: var(--ink-dim); cursor: pointer; }
 .chk input { accent-color: var(--accent); width: 18px; height: 18px; margin: 0; }
 .panel.wide { grid-column: 1 / -1; }
+.modeout { font: 700 .95rem var(--font-display); color: var(--accent); }
 .keys { display: block; width: 100%; height: 96px; touch-action: none; cursor: grab; border-radius: 6px; }
 .keys:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .rinfo { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .3rem 1rem; font-size: .9rem; color: var(--ink-dim); }
@@ -134,7 +135,8 @@ input[type="range"] { width: 100%; accent-color: var(--accent); margin: .2rem 0;
 /* ---------- settings ---------- */
 const VOICES_INIT = { bass:[40,60], baritone:[43,64], tenor:[48,67], alto:[53,74], soprano:[60,79] };
 const DEFAULTS = { bpm:60, ts:"7/4", root:"F#", mode:"mixolydian", voice:"tenor", len:"1", phrase:"4", breath:"3", leap:"5",
-  showInt:true, showName:false, look:"6", guideVol:45, guideLen:35, headphones:false, clickVol:25, ptingVol:50, tol:40, anyOct:true, clef:"auto", rangeLo:null, rangeHi:null };
+  showInt:true, showName:false, look:"6", guideVol:45, guideLen:35, headphones:false, clickVol:25, ptingVol:50, tol:40, anyOct:true, clef:"auto", rangeLo:null, rangeHi:null,
+  pattern:"updown", step:"1", rand:0, drone:false, droneVol:30 };
 const S = Object.assign({}, DEFAULTS);
 try { Object.assign(S, JSON.parse(localStorage.getItem("sightline.v1") || "{}")); } catch {}
 if (S.labels) { S.showInt=S.labels==="int"; S.showName=S.labels==="name"; delete S.labels; }
@@ -158,14 +160,17 @@ const CONTROLS = [
   ["Music", [
     {k:"bpm",t:"range",l:"Tempo",min:30,max:200,step:1,f:v=>v+" bpm",live:1},
     {k:"ts",t:"select",l:"Time signature",o:Object.fromEntries(TS.map(x=>[x,x]))},
-    {k:"root",t:"select",l:"Key",o:Object.fromEntries(ROOTS.map(x=>[x,x.replace("#","♯").replace("b","♭")]))},
-    {k:"mode",t:"select",l:"Mode",o:lab(MODES)},
+    {t:"custom",build:buildKeyControls},
   ]],
   ["Exercise", [
     {k:"len",t:"seg",l:"Note length (beats)",o:{1:"1",2:"2",3:"3",4:"4",mix:"Mix"}},
     {k:"phrase",t:"seg",l:"Notes between breaths",o:{2:"2",3:"3",4:"4",6:"6",8:"8"}},
     {k:"breath",t:"seg",l:"Breath (beats of rest)",o:{0:"0",1:"1",2:"2",3:"3",4:"4"}},
-    {k:"leap",t:"seg",l:"Largest leap (semitones)",o:{2:"2",3:"3",5:"5",7:"7",12:"12"}},
+    {k:"pattern",t:"seg",l:"Pattern",o:{updown:"Up & down",up:"Up",down:"Down",random:"Random"}},
+    {k:"step",t:"seg",l:()=>S.key==="none"?"Step size (semitones)":"Step size (scale steps)",
+      o:()=>S.key==="none"?{1:"1",2:"2",3:"3",4:"4",5:"5",7:"7"}:{1:"2nds",2:"3rds",3:"4ths",4:"5ths",5:"6ths",7:"Oct"}},
+    {k:"rand",t:"range",l:"Randomness",min:0,max:100,step:5,f:v=>v==0?"Exact pattern":v==100?"Fully random":v+"%"},
+    {k:"leap",t:"seg",l:"Largest random leap (semitones)",o:{2:"2",3:"3",5:"5",7:"7",12:"12"}},
     {k:"showInt",t:"check",l:"Show the interval (↑2 ↓3)",live:1},
     {k:"showName",t:"check",l:"Show the note name (F♯)",live:1},
     {k:"look",t:"seg",l:"Beats of look-ahead",o:{4:"4",6:"6",8:"8",12:"12"},live:1},
@@ -174,6 +179,8 @@ const CONTROLS = [
     {k:"guideVol",t:"range",l:"Guide note volume",min:0,max:100,step:1,f:v=>v?v+"%":"Off",live:1},
     {k:"guideLen",t:"range",l:"Guide note length",min:10,max:100,step:5,f:v=>S.headphones||v<=60?v+"% of note":"60% · no headphones",live:1},
     {k:"headphones",t:"check",l:"I'm wearing headphones",live:1},
+    {k:"drone",t:"check",l:"Drone on the home note",live:1},
+    {k:"droneVol",t:"range",l:"Drone volume",min:0,max:100,step:1,f:v=>v?v+"%":"Off",live:1},
     {k:"clickVol",t:"range",l:"Metronome",min:0,max:100,step:1,f:v=>v?v+"%":"Off",live:1},
     {k:"ptingVol",t:"range",l:"Pting",min:0,max:100,step:1,f:v=>v?v+"%":"Off",live:1},
   ]],
@@ -186,14 +193,29 @@ const CONTROLS = [
 /* ---------- theory: everything is spelled on the line of fifths ---------- */
 const LETTERS = "CDEFGAB", FIFTHS = "FCGDAEB", NAT = {C:0,D:2,E:4,F:5,G:7,A:9,B:11};
 const pcOf = f => ((f*7)%12+12)%12;
+const MAJ=[0,2,4,5,7,9,11], ORD=["1st","2nd","3rd","4th","5th","6th","7th"];
+const MODE_NAMES=["major (Ionian)","Dorian","Phrygian","Lydian","Mixolydian","minor (Aeolian)","Locrian"];
+const PC_NAMES=["C","C♯","D","E♭","E","F","F♯","G","A♭","A","B♭","B"];
+const pretty=x=>x.replace("#","♯").replace("b","♭");
+const keySig=k=>FIFTHS.indexOf(k[0])-1+7*(k[1]==="#"?1:k[1]==="b"?-1:0);
+function keyFromSig(sig) { const i=sig+1, a=Math.floor(i/7); return FIFTHS[((i%7)+7)%7]+(a>0?"#":a<0?"b":""); }
+function homeName(key,deg) { const sig=keySig(key), letter=LETTERS[(LETTERS.indexOf(key[0])+deg-1)%7]; return letter+accText(sigAcc({sig},letter)); }
+function modeLabel() { return S.key==="none"?"No key · walks start on "+PC_NAMES[+S.home||0]:homeName(S.key,+S.deg)+" "+MODE_NAMES[+S.deg-1]; }
+// older saves used root + mode; turn that into parent major key + home degree
+if (S.key==null) {
+  const MO={major:[0,1],minor:[3,6],dorian:[2,2],phrygian:[4,3],lydian:[-1,4],mixolydian:[1,5],locrian:[5,7],harmonic:[3,6],pentMaj:[0,1],pentMin:[3,6]};
+  const root=S.root||"F#", mode=S.mode||"mixolydian";
+  if (mode==="chromatic") { S.key="none"; S.home=String(pcOf(keySig(root))); }
+  else { const [off,deg]=MO[mode]||[0,1]; let sig=keySig(root)-off; if (sig>7) sig-=12; else if (sig<-7) sig+=12; S.key=keyFromSig(sig); S.deg=String(deg); }
+  delete S.root; delete S.mode; save();
+}
+S.deg=S.deg||"1"; S.home=S.home||"0";
 function makeKey() {
-  const m = MODES[S.mode], L = S.root[0], acc = S.root[1]==="#"?1:S.root[1]==="b"?-1:0;
-  let f = FIFTHS.indexOf(L)-1+7*acc, sig = f-m.off;
-  if (sig>7) { sig-=12; f-=12; } else if (sig<-7) { sig+=12; f+=12; }
-  const tonic = pcOf(f), set = new Set(m.s.map(x=>(tonic+x)%12)), notes=[];
+  const [num,den] = S.ts.split("/").map(Number), clef=S.clef==="auto"?autoClef(S.lo,S.hi):S.clef, notes=[];
+  if (S.key==="none") { for (let n=S.lo;n<=S.hi;n++) notes.push(n); return { sig:0, tonic:+S.home||0, notes, clef, num, den, cache:new Map() }; }
+  const sig=keySig(S.key), parent=pcOf(sig), tonic=(parent+MAJ[+S.deg-1])%12, set=new Set(MAJ.map(x=>(parent+x)%12));
   for (let n=S.lo;n<=S.hi;n++) if (set.has(n%12)) notes.push(n);
-  const [num,den] = S.ts.split("/").map(Number);
-  return { sig, tonic, notes, clef:S.clef==="auto"?autoClef(S.lo,S.hi):S.clef, num, den, cache:new Map() };
+  return { sig, tonic, notes, clef, num, den, cache:new Map() };
 }
 function sigAcc(key, letter) { const b = FIFTHS.indexOf(letter)-1; return Math.ceil((key.sig-1-b)/7); }
 function spell(key, midi) {
@@ -214,14 +236,33 @@ function sysLines(clef) { const st=CLEF[clef].staves; return [Math.min(...st.map
 
 /* ---------- the score: an endless list of bars ---------- */
 const score = { bars:[], gen:null, key:null };
-function pickNext(key, prev) {
-  if (prev==null) { const mid=(S.lo+S.hi)/2;
-    return key.notes.filter(n=>n%12===key.tonic).sort((a,b)=>Math.abs(a-mid)-Math.abs(b-mid))[0] ?? key.notes[0]; }
-  const max=+S.leap; let pool=key.notes.filter(n=>n!==prev && Math.abs(n-prev)<=max);
-  if (!pool.length) pool=key.notes.filter(n=>n!==prev).sort((a,b)=>Math.abs(a-prev)-Math.abs(b-prev)).slice(0,2);
-  const w=pool.map(n=>1/Math.abs(n-prev)); let r=Math.random()*w.reduce((a,b)=>a+b,0);
-  for (let i=0;i<pool.length;i++) { r-=w[i]; if (r<=0) return pool[i]; }
-  return pool[pool.length-1];
+function tonicIdx(notes,tonic,where) {
+  const ix=[]; notes.forEach((n,i)=>{ if (n%12===tonic) ix.push(i); });
+  if (!ix.length) return where==="top"?notes.length-1:where==="mid"?notes.length>>1:0;
+  if (where==="bottom") return ix[0]; if (where==="top") return ix[ix.length-1];
+  const mid=(notes.length-1)/2; return ix.sort((a,b)=>Math.abs(a-mid)-Math.abs(b-mid))[0];
+}
+// walk the scale by index: in a key one index is one scale step, with no key it is one semitone
+function nextIdx(key,g) {
+  const ns=key.notes, N=ns.length, pat=S.pattern, r=(+S.rand)/100, step=Math.max(1,+S.step);
+  if (g.idx==null||g.idx>=N) { g.dir=pat==="down"?-1:1; return g.idx=tonicIdx(ns,key.tonic,pat==="down"?"top":pat==="random"?"mid":"bottom"); }
+  const cur=ns[g.idx], max=+S.leap;
+  const randomMove=()=>{ const o=[]; for (let i=0;i<N;i++) if (i!==g.idx&&Math.abs(ns[i]-cur)<=max) o.push(i);
+    if (!o.length) return g.idx+(g.idx+1<N?1:-1);
+    const w=o.map(i=>1/Math.abs(ns[i]-cur)); let x=Math.random()*w.reduce((a,b)=>a+b,0);
+    for (let i=0;i<o.length;i++) { x-=w[i]; if (x<=0) return o[i]; } return o[o.length-1]; };
+  const walk=sz=>{ let t=g.idx+g.dir*sz;
+    if (t<0||t>=N) {
+      if (pat==="up") t=tonicIdx(ns,key.tonic,"bottom"); else if (pat==="down") t=tonicIdx(ns,key.tonic,"top");
+      else { g.dir=-g.dir; t=g.idx+g.dir*sz; if (t<0||t>=N) t=Math.max(0,Math.min(N-1,t)); }
+    }
+    return t; };
+  let t;
+  if (pat==="random"||(Math.random()<r&&Math.random()<r)) t=randomMove();
+  else if (Math.random()<r) { if (pat==="updown"&&Math.random()<.5) g.dir=-g.dir; const sz=Math.max(1,step+(Math.random()<.5?-1:1)*(1+(Math.random()*2|0))); t=walk(sz); }
+  else t=walk(step);
+  if (t===g.idx) t=g.idx+(g.idx+1<N?1:-1);
+  return g.idx=Math.max(0,Math.min(N-1,t));
 }
 function appendBar() {
   const key=score.key, g=score.gen, last=score.bars[score.bars.length-1], start=last?last.start+last.num:0;
@@ -231,7 +272,7 @@ function appendBar() {
     const r=key.num-b;
     if (g.rest>0) { const len=Math.min(g.rest,r); bar.items.push({rest:true,beat:start+b,len,bar}); g.rest-=len; b+=len; continue; }
     const L=S.len==="mix"?[1,1,2][Math.random()*3|0]:+S.len, len=Math.min(L,r);
-    const midi=pickNext(key,g.prev), sp=spell(key,midi);
+    const midi=key.notes[nextIdx(key,g)], sp=spell(key,midi);
     const cur=seen.has(sp.step)?seen.get(sp.step):sigAcc(key,sp.letter); seen.set(sp.step,sp.acc);
     const it={midi,sp,beat:start+b,len,bar,showAcc:cur!==sp.acc,interval:g.prev==null?null:midi-g.prev,good:0,voiced:0,sum:0};
     bar.items.push(it); g.prev=midi; b+=len;
@@ -249,9 +290,12 @@ function rebuild() {
     const b=nowBeat(), i=score.bars.findIndex(x=>b>=x.start && b<x.start+x.num);
     score.bars.length=i+1;
     let prev=null; for (let j=score.bars.length-1;j>=0&&prev==null;j--) { const ns=score.bars[j].items.filter(x=>!x.rest); if (ns.length) prev=ns[ns.length-1].midi; }
-    score.gen={prev,left:+S.phrase,rest:0};
-  } else { score.bars=[]; score.gen={prev:null,left:+S.phrase,rest:0}; }
+    const ns=score.key.notes; let idx=null;
+    if (prev!=null) { idx=0; ns.forEach((n,i)=>{ if (Math.abs(n-prev)<Math.abs(ns[idx]-prev)) idx=i; }); }
+    score.gen={prev,idx,dir:S.pattern==="down"?-1:1,left:+S.phrase,rest:0};
+  } else { score.bars=[]; score.gen={prev:null,idx:null,left:+S.phrase,rest:0}; }
   ensureBars(T.run?nowBeat()+24:24);
+  updateDrone();
 }
 const barAt = b => score.bars.find(x=>b>=x.start&&b<x.start+x.num) || score.bars[0];
 function noteAt(b) { const bar=barAt(b); if (!bar||b<bar.start) return null; return bar.items.find(x=>b>=x.beat&&b<x.beat+x.len)||null; }
@@ -276,6 +320,17 @@ function tone(freq,t,dur,vol,type) {
 function click(t,accent,vol) {
   const g=ctx.createGain(), o=ctx.createOscillator(); o.type="square"; o.frequency.value=accent?1900:1300; o.connect(g); g.connect(master);
   g.gain.setValueAtTime(vol*.28,t); g.gain.exponentialRampToValueAtTime(.0005,t+.035); o.start(t); o.stop(t+.04);
+}
+const drone={o:null};
+function updateDrone() {
+  if (!ctx) return;
+  const want=T.run&&S.drone&&S.droneVol>0, t=ctx.currentTime;
+  if (!want) { if (drone.o) { const d=drone.o; d.g.gain.setTargetAtTime(0,t,.15); setTimeout(()=>{ try { d.a.stop(); d.b.stop(); } catch {} },900); drone.o=null; } return; }
+  const k=score.key, m=S.lo-1-(((S.lo-1-k.tonic)%12)+12)%12, hz=440*2**((m-69)/12);
+  if (!drone.o) { const g=ctx.createGain(), a=ctx.createOscillator(), b=ctx.createOscillator(), gb=ctx.createGain();
+    a.type="triangle"; b.type="sine"; gb.gain.value=.35; a.connect(g); b.connect(gb); gb.connect(g); g.connect(master); g.gain.value=0; a.start(); b.start(); drone.o={g,a,b}; }
+  drone.o.a.frequency.setTargetAtTime(hz,t,.05); drone.o.b.frequency.setTargetAtTime(hz*2,t,.05);
+  drone.o.g.gain.setTargetAtTime(S.droneVol/100*.16,t,.12);
 }
 function pting() {
   const v=S.ptingVol/100; if (!v) return; const t=ctx.currentTime;
@@ -343,7 +398,7 @@ function detect() {
 }
 let lastTarget=null;
 const stats={hit:0,total:0,streak:0,best:0,sum:0,n:0};
-function fold(midi,target) { return target==null||!S.anyOct?midi:midi+12*Math.round((target-midi)/12); }
+function fold(midi,target) { return target==null||!S.anyOct||(S.drone&&!S.headphones)?midi:midi+12*Math.round((target-midi)/12); }
 function listen(t,dt) {
   const midi=detect(), tc=t-.045;
   const it=T.run?noteAt(beatAt(tc)):null, target=it&&!it.rest?it.midi:null;
@@ -678,7 +733,7 @@ async function start() {
   audio(); const ok=await startMic();
   stats.hit=stats.total=stats.streak=stats.sum=stats.n=0; trace.length=0; lastTarget=null; T.run=false;
   T.spb=60/S.bpm; rebuild();
-  const count=score.key.num; T.a0=ctx.currentTime+.2; T.b0=-count; T.b0Start=-count; T.nextClick=-count; T.run=true;
+  const count=score.key.num; T.a0=ctx.currentTime+.2; T.b0=-count; T.b0Start=-count; T.nextClick=-count; T.run=true; updateDrone();
   $("go").textContent="Stop";
   say(ok?(S.headphones?"":"Mic ignores the guide note while it sounds. Sing as it ends, or put on headphones."):$("msg").textContent);
   try { wake=await navigator.wakeLock?.request("screen"); } catch {}
@@ -703,27 +758,43 @@ addEventListener("keydown",e=>{ if (e.code==="Space"&&!/SELECT|INPUT|BUTTON/.tes
 
 /* ---------- controls ---------- */
 const refresh=[];
+function rebuildSettings() { const y=scrollY; $("groups").innerHTML=""; refresh.length=0; buildControls(); buildRangePanel($("groups")); scrollTo(0,y); }
+function buildKeyControls(p) {
+  const d=document.createElement("div"); d.className="ctl";
+  const keys={none:"No key (all 12 notes)"}; for (const k of ROOTS) keys[k]=pretty(k)+" major";
+  d.innerHTML=`<label for="c-key">Key</label><select id="c-key">${Object.entries(keys).map(([v,n])=>`<option value="${v}">${n}</option>`).join("")}</select>`;
+  const h=document.createElement("div"); h.className="ctl";
+  const homes=S.key==="none"?Object.fromEntries(PC_NAMES.map((n,i)=>[i,n])):Object.fromEntries(ORD.map((o,i)=>[i+1,`${o} · ${homeName(S.key,i+1)} ${MODE_NAMES[i]}`]));
+  h.innerHTML=`<label for="c-home">Home note</label><select id="c-home">${Object.entries(homes).map(([v,n])=>`<option value="${v}">${n}</option>`).join("")}</select><span class="modeout" id="modeOut"></span>`;
+  const ks=d.querySelector("select"), hs=h.querySelector("select"); ks.value=S.key; hs.value=S.key==="none"?S.home:S.deg;
+  const show=()=>{ h.querySelector("#modeOut").textContent=modeLabel(); }; show();
+  ks.onchange=()=>{ const was=S.key; S.key=ks.value; if ((was==="none")!==(S.key==="none")) S.step="1"; save(); rebuild(); rebuildSettings(); };
+  hs.onchange=()=>{ if (S.key==="none") S.home=hs.value; else S.deg=hs.value; save(); rebuild(); show(); };
+  p.appendChild(d); p.appendChild(h);
+}
 function buildControls() {
   const root=$("groups");
   for (const [title,items] of CONTROLS) {
     const p=document.createElement("section"); p.className="panel"; p.innerHTML=`<h2>${title}</h2>`;
     for (const c of items) {
       const d=document.createElement("div"); d.className="ctl"; const id="c-"+c.k;
-      const changed=()=>{ save(); refresh.forEach(f=>f()); if (c.k==="bpm") setTempo(); if (!c.live) rebuild(); };
+      const changed=()=>{ save(); refresh.forEach(f=>f()); if (c.k==="bpm") setTempo(); if (!c.live) rebuild(); updateDrone(); };
+      const L=typeof c.l==="function"?c.l():c.l, O=typeof c.o==="function"?c.o():c.o;
+      if (c.t==="custom") { c.build(p); continue; }
       if (c.t==="range") {
-        d.innerHTML=`<label for="${id}"><span>${c.l}</span><output></output></label><input type="range" id="${id}" min="${c.min}" max="${c.max}" step="${c.step}">`;
+        d.innerHTML=`<label for="${id}"><span>${L}</span><output></output></label><input type="range" id="${id}" min="${c.min}" max="${c.max}" step="${c.step}">`;
         const inp=d.querySelector("input"), out=d.querySelector("output"); inp.value=S[c.k];
         const show=()=>{ out.textContent=c.f(S[c.k]); }; show(); refresh.push(show);
         inp.oninput=()=>{ S[c.k]=+inp.value; changed(); };
       } else if (c.t==="select") {
-        d.innerHTML=`<label for="${id}">${c.l}</label><select id="${id}">${Object.entries(c.o).map(([v,n])=>`<option value="${v}">${n}</option>`).join("")}</select>`;
+        d.innerHTML=`<label for="${id}">${L}</label><select id="${id}">${Object.entries(O).map(([v,n])=>`<option value="${v}">${n}</option>`).join("")}</select>`;
         const sel=d.querySelector("select"); sel.value=S[c.k]; sel.onchange=()=>{ S[c.k]=sel.value; changed(); };
       } else if (c.t==="seg") {
-        d.innerHTML=`<span class="lbl">${c.l}</span><div class="seg" role="group">${Object.entries(c.o).map(([v,n])=>`<button type="button" data-v="${v}">${n}</button>`).join("")}</div>`;
+        d.innerHTML=`<span class="lbl">${L}</span><div class="seg" role="group">${Object.entries(O).map(([v,n])=>`<button type="button" data-v="${v}">${n}</button>`).join("")}</div>`;
         const bs=[...d.querySelectorAll("button")], mark=()=>bs.forEach(b=>b.setAttribute("aria-pressed",b.dataset.v===String(S[c.k]))); mark();
         bs.forEach(b=>b.onclick=()=>{ S[c.k]=b.dataset.v; mark(); changed(); });
       } else {
-        d.innerHTML=`<label class="chk" style="all:unset;display:flex;gap:.5rem;align-items:center;cursor:pointer;color:var(--ink-dim)"><input type="checkbox" id="${id}"><span>${c.l}</span></label>`;
+        d.innerHTML=`<label class="chk" style="all:unset;display:flex;gap:.5rem;align-items:center;cursor:pointer;color:var(--ink-dim)"><input type="checkbox" id="${id}"><span>${L}</span></label>`;
         const inp=d.querySelector("input"); inp.checked=S[c.k]; inp.onchange=()=>{ S[c.k]=inp.checked; changed(); };
       }
       p.appendChild(d);

@@ -72,6 +72,22 @@ input[type="range"] { width: 100%; accent-color: var(--accent); margin: .2rem 0;
 .seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.14); }
 .chk { display: flex; gap: .5rem; align-items: center; font-size: .92rem; color: var(--ink-dim); cursor: pointer; }
 .chk input { accent-color: var(--accent); width: 18px; height: 18px; margin: 0; }
+.panel.wide { grid-column: 1 / -1; }
+.keys { display: block; width: 100%; height: 96px; touch-action: none; cursor: grab; border-radius: 6px; }
+.keys:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rinfo { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .3rem 1rem; font-size: .9rem; color: var(--ink-dim); }
+.rinfo b { color: var(--ink); }
+.rgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: .7rem 1rem; align-items: end; }
+#range .panel { max-width: 760px; margin: 0 auto; }
+#rtSay { margin: 0; color: var(--ink-dim); max-width: 62ch; }
+.rtbig { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+.rtbig div { display: grid; gap: .2rem; }
+.rtbig small { font: .66rem var(--font-mono); letter-spacing: .08em; color: var(--ink-faint); }
+.rtbig b { font: 700 clamp(2.4rem, 9vw, 4.2rem)/1 var(--font-display); font-variant-numeric: tabular-nums; }
+#rtTarget { color: var(--accent); }
+.hold { height: 10px; background: var(--surface-2); border-radius: 5px; overflow: hidden; }
+.hold div { height: 100%; width: 0; background: var(--good); }
+.rtbtns { display: flex; gap: .5rem; flex-wrap: wrap; }
 </style>
 </head>
 <body>
@@ -101,16 +117,28 @@ input[type="range"] { width: 100%; accent-color: var(--accent); margin: .2rem 0;
     <header><h1>Settings</h1><button class="btn" id="doneBtn">Done</button></header>
     <div class="groups" id="groups"></div>
   </section>
+  <section id="range" hidden>
+    <header><h1>Range test</h1><button class="btn ghost" id="rtClose">Close</button></header>
+    <div class="panel">
+      <p id="rtSay"></p>
+      <div class="rtbig"><div><small>SING</small><b id="rtTarget">–</b></div><div><small>YOU</small><b id="rtYou">–</b></div></div>
+      <div class="hold" aria-hidden="true"><div id="rtHold"></div></div>
+      <canvas id="rtKeys" class="keys" style="cursor:default" aria-label="Keyboard showing the range found so far"></canvas>
+      <div class="rtbtns"><button class="btn" id="rtGo">Begin</button><button class="btn ghost" id="rtSkip" hidden>That's my top</button></div>
+    </div>
+  </section>
 </div>
 
 <script>
 "use strict";
 /* ---------- settings ---------- */
+const VOICES_INIT = { bass:[40,60], baritone:[43,64], tenor:[48,67], alto:[53,74], soprano:[60,79] };
 const DEFAULTS = { bpm:60, ts:"7/4", root:"F#", mode:"mixolydian", voice:"tenor", len:"1", phrase:"4", breath:"3", leap:"5",
-  showInt:true, showName:false, look:"6", guideVol:45, guideLen:35, headphones:false, clickVol:25, ptingVol:50, tol:40, anyOct:true };
+  showInt:true, showName:false, look:"6", guideVol:45, guideLen:35, headphones:false, clickVol:25, ptingVol:50, tol:40, anyOct:true, clef:"auto", rangeLo:null, rangeHi:null };
 const S = Object.assign({}, DEFAULTS);
 try { Object.assign(S, JSON.parse(localStorage.getItem("sightline.v1") || "{}")); } catch {}
 if (S.labels) { S.showInt=S.labels==="int"; S.showName=S.labels==="name"; delete S.labels; }
+if (S.lo==null||S.hi==null) { const v=VOICES_INIT[S.voice]||VOICES_INIT.tenor; S.lo=v[0]; S.hi=v[1]; }
 const save = () => { try { localStorage.setItem("sightline.v1", JSON.stringify(S)); } catch {} };
 
 const MODES = {
@@ -132,7 +160,6 @@ const CONTROLS = [
     {k:"ts",t:"select",l:"Time signature",o:Object.fromEntries(TS.map(x=>[x,x]))},
     {k:"root",t:"select",l:"Key",o:Object.fromEntries(ROOTS.map(x=>[x,x.replace("#","♯").replace("b","♭")]))},
     {k:"mode",t:"select",l:"Mode",o:lab(MODES)},
-    {k:"voice",t:"select",l:"Voice range",o:lab(VOICES)},
   ]],
   ["Exercise", [
     {k:"len",t:"seg",l:"Note length (beats)",o:{1:"1",2:"2",3:"3",4:"4",mix:"Mix"}},
@@ -163,10 +190,10 @@ function makeKey() {
   const m = MODES[S.mode], L = S.root[0], acc = S.root[1]==="#"?1:S.root[1]==="b"?-1:0;
   let f = FIFTHS.indexOf(L)-1+7*acc, sig = f-m.off;
   if (sig>7) { sig-=12; f-=12; } else if (sig<-7) { sig+=12; f+=12; }
-  const v = VOICES[S.voice], tonic = pcOf(f), set = new Set(m.s.map(x=>(tonic+x)%12)), notes=[];
-  for (let n=v.lo;n<=v.hi;n++) if (set.has(n%12)) notes.push(n);
+  const tonic = pcOf(f), set = new Set(m.s.map(x=>(tonic+x)%12)), notes=[];
+  for (let n=S.lo;n<=S.hi;n++) if (set.has(n%12)) notes.push(n);
   const [num,den] = S.ts.split("/").map(Number);
-  return { sig, tonic, notes, clef:v.clef, num, den, cache:new Map() };
+  return { sig, tonic, notes, clef:S.clef==="auto"?autoClef(S.lo,S.hi):S.clef, num, den, cache:new Map() };
 }
 function sigAcc(key, letter) { const b = FIFTHS.indexOf(letter)-1; return Math.ceil((key.sig-1-b)/7); }
 function spell(key, midi) {
@@ -178,12 +205,17 @@ function spell(key, midi) {
   key.cache.set(midi, sp); return sp;
 }
 function accText(a) { return a>0 ? "♯".repeat(a) : a<0 ? "♭".repeat(-a) : ""; }
-const CLEF = { treble:{mid:34,add:0}, treble8:{mid:34,add:7}, bass:{mid:22,add:0} };
+// staves are [lowest line, highest line, glyph] in written steps; C4 = step 28
+const CLEF = { treble:{add:0,staves:[[30,38,"treble"]]}, treble8:{add:7,staves:[[30,38,"treble8"]]}, bass:{add:0,staves:[[18,26,"bass"]]},
+  grand:{add:0,staves:[[30,38,"treble"],[18,26,"bass"]]} };
+const CLEF_NAMES = { auto:"Auto", treble:"Treble", treble8:"Treble 8vb", bass:"Bass", grand:"Grand staff" };
+function autoClef(lo,hi) { return lo>=53?"treble":hi<=64?"bass":"grand"; }
+function sysLines(clef) { const st=CLEF[clef].staves; return [Math.min(...st.map(x=>x[0])),Math.max(...st.map(x=>x[1]))]; }
 
 /* ---------- the score: an endless list of bars ---------- */
 const score = { bars:[], gen:null, key:null };
 function pickNext(key, prev) {
-  if (prev==null) { const mid=(VOICES[S.voice].lo+VOICES[S.voice].hi)/2;
+  if (prev==null) { const mid=(S.lo+S.hi)/2;
     return key.notes.filter(n=>n%12===key.tonic).sort((a,b)=>Math.abs(a-mid)-Math.abs(b-mid))[0] ?? key.notes[0]; }
   const max=+S.leap; let pool=key.notes.filter(n=>n!==prev && Math.abs(n-prev)<=max);
   if (!pool.length) pool=key.notes.filter(n=>n!==prev).sort((a,b)=>Math.abs(a-prev)-Math.abs(b-prev)).slice(0,2);
@@ -346,8 +378,11 @@ new ResizeObserver(size).observe(cv);
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change",colors);
 new MutationObserver(colors).observe(document.documentElement,{attributes:true,attributeFilter:["data-theme"]});
 
-function yStep(step,cy,sp,clef) { const c=CLEF[clef]; return cy-(step+c.add-c.mid)*sp/2; }
-function yMidi(m,key,cy,sp) { const lo=Math.floor(m), f=m-lo, a=yStep(spell(key,lo).step,cy,sp,key.clef), b=yStep(spell(key,lo+1).step,cy,sp,key.clef); return a+(b-a)*f; }
+const G={ref:0,sp:10,gap:0};
+// on the grand staff, middle C and up belong to the treble staff, which sits G.gap higher
+const yW=ws=>G.ref-(ws-28)*G.sp/2-(ws>=28?G.gap:0);
+function yStep(step,clef) { return yW(step+CLEF[clef].add); }
+function yMidi(m,key) { const lo=Math.floor(m), f=m-lo, a=yStep(spell(key,lo).step,key.clef), b=yStep(spell(key,lo+1).step,key.clef); return a+(b-a)*f; }
 function glyph(ch,x,y,size,col) { g2.font=`${size}px ${FONT}`; g2.fillStyle=col; g2.textAlign="center"; g2.textBaseline="alphabetic"; g2.fillText(ch,x,y); }
 function drawHead(x,y,sp,open,col) {
   g2.save(); g2.translate(x,y); g2.rotate(-.35); g2.fillStyle=col; g2.beginPath(); g2.ellipse(0,0,sp*.66,sp*.44,0,0,7); g2.fill();
@@ -355,18 +390,23 @@ function drawHead(x,y,sp,open,col) {
   g2.restore();
 }
 const SHARP=[0,-3,1,-2,-5,-1,-4], FLAT=[-4,-1,-5,-2,-6,-3,-7]; // steps from the top line
-function drawSticky(bar,cy,sp,left) {
-  const key=bar.key, clef=key.clef, top=cy-2*sp; let x=left;
-  if (clef==="bass") { glyph("\u{1D122}",x+sp*1.3,top+sp*2.42,sp*3.55,C.ink); }
-  else { glyph("\u{1D11E}",x+sp*1.3,top+sp*3.9,sp*3.55,C.ink);
-    if (clef==="treble8") { g2.font=`700 ${sp*.8}px "JetBrains Mono", monospace`; g2.fillStyle=C.ink; g2.textAlign="center"; g2.fillText("8",x+sp*1.3,top+sp*6.5); } }
-  x+=sp*2.9;
-  const n=Math.abs(key.sig), base=key.sig>0?SHARP:FLAT, ch=key.sig>0?"♯":"♭", shift=clef==="bass"?-2:0;
-  for (let i=0;i<n;i++) { const steps=base[i]+shift; glyph(ch,x+i*sp*.74+sp*.3,top-steps*sp/2+sp*.42,sp*1.9,C.ink); }
-  x+=n*sp*.74+sp*.45;
-  g2.font=`700 ${sp*1.9}px Georgia, "Times New Roman", serif`; g2.fillStyle=C.ink; g2.textAlign="center"; g2.textBaseline="middle";
-  g2.fillText(bar.num,x+sp*.75,cy-sp*.92); g2.fillText(bar.den,x+sp*.75,cy+sp*1.02); g2.textBaseline="alphabetic";
-  return x+sp*1.7;
+function drawSticky(bar,sp,left) {
+  const key=bar.key, st=CLEF[key.clef].staves; let xEnd=left;
+  if (st.length>1) { g2.strokeStyle=C.ink; g2.lineWidth=1.6; g2.beginPath(); g2.moveTo(left,yW(st[0][1])); g2.lineTo(left,yW(st[1][0])); g2.stroke(); }
+  for (const [lo,hi,t] of st) {
+    const top=yW(hi), mid=yW((lo+hi)/2); let x=left;
+    if (t==="bass") glyph("\u{1D122}",x+sp*1.3,top+sp*2.42,sp*3.55,C.ink);
+    else { glyph("\u{1D11E}",x+sp*1.3,top+sp*3.9,sp*3.55,C.ink);
+      if (t==="treble8") { g2.font=`700 ${sp*.8}px "JetBrains Mono", monospace`; g2.fillStyle=C.ink; g2.textAlign="center"; g2.fillText("8",x+sp*1.3,top+sp*6.5); } }
+    x+=sp*2.9;
+    const n=Math.abs(key.sig), base=key.sig>0?SHARP:FLAT, ch=key.sig>0?"♯":"♭", shift=t==="bass"?-2:0;
+    for (let i=0;i<n;i++) { const steps=base[i]+shift; glyph(ch,x+i*sp*.74+sp*.3,top-steps*sp/2+sp*.42,sp*1.9,C.ink); }
+    x+=n*sp*.74+sp*.45;
+    g2.font=`700 ${sp*1.9}px Georgia, "Times New Roman", serif`; g2.fillStyle=C.ink; g2.textAlign="center"; g2.textBaseline="middle";
+    g2.fillText(bar.num,x+sp*.75,mid-sp*.92); g2.fillText(bar.den,x+sp*.75,mid+sp*1.02); g2.textBaseline="alphabetic";
+    xEnd=x+sp*1.7;
+  }
+  return xEnd;
 }
 function gutterFor(bar,sp) { return 8+sp*2.9+Math.abs(bar.key.sig)*sp*.74+sp*.45+sp*1.7; }
 function drawRest(x,cy,sp,val,col) {
@@ -374,21 +414,24 @@ function drawRest(x,cy,sp,val,col) {
   else if (val===.5) { g2.fillStyle=col; g2.fillRect(x-sp*.6,cy-sp*.5,sp*1.2,sp*.5); }
   else glyph(val===.25?"\u{1D13D}":"\u{1D13E}",x,cy+sp*.5,sp*3.1,col);
 }
-function drawNote(it,x,cy,sp,alpha,dy,ppb,labelY,now) {
-  const key=it.bar.key, sp2=it.sp, y=yStep(sp2.step,cy,sp,key.clef)+dy, val=it.len/it.bar.den;
+function drawNote(it,x,sp,alpha,dy,ppb,labelY,now) {
+  const key=it.bar.key, sp2=it.sp, ws=sp2.step+CLEF[key.clef].add, y=yW(ws)+dy, val=it.len/it.bar.den;
+  const [lo,hi]=sysLines(key.clef), grand=key.clef==="grand";
   const col=it.hit?C.good:it.miss?C.bad:C.ink; g2.globalAlpha=alpha;
   // the lane shows how long to hold
   g2.fillStyle=it.hit?C.good:it.miss?C.bad:C.accent; g2.globalAlpha=alpha*.16;
   g2.beginPath(); g2.roundRect(x,y-sp*.42,Math.max(sp,it.len*ppb-sp*.3),sp*.84,sp*.42); g2.fill(); g2.globalAlpha=alpha;
   // ledger lines
-  g2.strokeStyle=C["ink-dim"]; g2.lineWidth=1.1; const c=CLEF[key.clef], off=sp2.step+c.add-c.mid;
-  for (let o=6;o<=off;o+=2) { const ly=cy-o*sp/2+dy; g2.beginPath(); g2.moveTo(x-sp,ly); g2.lineTo(x+sp,ly); g2.stroke(); }
-  for (let o=-6;o>=off;o-=2) { const ly=cy-o*sp/2+dy; g2.beginPath(); g2.moveTo(x-sp,ly); g2.lineTo(x+sp,ly); g2.stroke(); }
+  g2.strokeStyle=C["ink-dim"]; g2.lineWidth=1.1;
+  const ledger=s=>{ const ly=yW(s)+dy; g2.beginPath(); g2.moveTo(x-sp,ly); g2.lineTo(x+sp,ly); g2.stroke(); };
+  for (let s=hi+2;s<=ws;s+=2) ledger(s);
+  for (let s=lo-2;s>=ws;s-=2) ledger(s);
+  if (grand&&ws===28) ledger(28);
   if (it.showAcc) glyph(sp2.acc>0?"♯":sp2.acc<0?"♭":"♮",x-sp*1.35,y+sp*.42,sp*1.9,col);
   const dotted=val===.75||val===.375, open=val>=.5;
   drawHead(x,y,sp,open,col);
-  if (dotted) { g2.fillStyle=col; g2.beginPath(); g2.arc(x+sp*1.05,y-(off%2===0?sp*.5:0),sp*.15,0,7); g2.fill(); }
-  if (val<1) { const up=off<0, sx=x+(up?sp*.6:-sp*.6), ey=y+(up?-1:1)*sp*3.4;
+  if (dotted) { g2.fillStyle=col; g2.beginPath(); g2.arc(x+sp*1.05,y-(ws%2===0?sp*.5:0),sp*.15,0,7); g2.fill(); }
+  if (val<1) { const up=ws<(grand?(ws>=28?34:22):(lo+hi)/2), sx=x+(up?sp*.6:-sp*.6), ey=y+(up?-1:1)*sp*3.4;
     g2.strokeStyle=col; g2.lineWidth=Math.max(1.2,sp*.1); g2.beginPath(); g2.moveTo(sx,y); g2.lineTo(sx,ey); g2.stroke();
     if (val===.125) { const d=up?1:-1; g2.fillStyle=col; g2.beginPath(); g2.moveTo(sx,ey); g2.bezierCurveTo(sx+sp*.2,ey+d*sp*1.1,sx+sp*1.5,ey+d*sp*1.4,sx+sp*.95,ey+d*sp*2.6); g2.bezierCurveTo(sx+sp*1.2,ey+d*sp*1.5,sx+sp*.3,ey+d*sp*1.5,sx,ey+d*sp*1); g2.fill(); } }
   if (labelY) {
@@ -397,8 +440,8 @@ function drawNote(it,x,cy,sp,alpha,dy,ppb,labelY,now) {
       g2.font=`700 ${sp*1.1}px "JetBrains Mono", "Sightline Music", monospace`; g2.fillStyle=lc; g2.fillText(t,x,labelY.int+dy*.4); }
     if (S.showName) { g2.font=`700 ${sp*1.1}px "Familjen Grotesk", "Sightline Music", sans-serif`; g2.fillStyle=S.showInt?C["ink-dim"]:lc; g2.fillText(sp2.name,x,labelY.name+dy*.4); }
   }
-  if (it.breath) { g2.font=`700 ${sp*2.2}px Georgia, serif`; g2.fillStyle=C["ink-dim"]; g2.textAlign="center"; g2.fillText(",",x+(it.len)*ppb-sp*.2,cy-sp*2.6+dy); }
-  if (it.miss&&it.dev!=null) { g2.font=`500 ${sp*.8}px "JetBrains Mono", monospace`; g2.fillStyle=C.bad; g2.textAlign="center"; g2.fillText((it.dev>0?"+":"")+it.dev+"¢",x,cy+sp*5.1); }
+  if (it.breath) { g2.font=`700 ${sp*2.2}px Georgia, serif`; g2.fillStyle=C["ink-dim"]; g2.textAlign="center"; g2.fillText(",",x+(it.len)*ppb-sp*.2,yW(hi)-sp*.6+dy); }
+  if (it.miss&&it.dev!=null) { g2.font=`500 ${sp*.8}px "JetBrains Mono", monospace`; g2.fillStyle=C.bad; g2.textAlign="center"; g2.fillText((it.dev>0?"+":"")+it.dev+"¢",x,yW(lo)+sp*3.1); }
   g2.globalAlpha=1;
   if (it.hitAt) { const age=(performance.now()-it.hitAt)/700;
     if (age<1) { g2.globalAlpha=1-age; g2.strokeStyle=C.good; g2.lineWidth=2.5; g2.beginPath(); g2.arc(x,y,sp*(.9+age*2.6),0,7); g2.stroke();
@@ -421,41 +464,45 @@ function render() {
   if (!W) return;
   const t=ctx?ctx.currentTime:performance.now()/1000, now=T.run?beatAt(t):0;
   const rows=(S.showInt?1:0)+(S.showName?1:0);
-  const sp=Math.max(9,Math.min(H/(rows?22:15),W/30,16)), cy=rows?H-sp*5.6:H/2+sp*.5, top=cy-2*sp, left=8;
+  const cur0=barAt(Math.max(now,0)), clef=(cur0||score).key.clef, [mn,mx]=sysLines(clef), span=(mx-mn)/4+(clef==="grand"?2.5:0);
+  const sp=Math.max(8,Math.min(H/((rows?18:11)+span),W/30,16)); G.sp=sp; G.gap=clef==="grand"?sp*2.5:0;
+  G.ref=rows?(H-sp*3.6)+(mn-28)*sp/2:(H/2+sp*.5)+((mn+mx)/2-28)*sp/2+G.gap/2;
+  const top=yW(mx), bot=yW(mn), left=8, restY=yW(CLEF[clef].staves[0][0]+4);
   // small labels ride over each note; the big "next note" readout sits in the band above them
   const labels=rows?{int:top-sp*2.3,name:S.showInt?top-sp*3.7:top-sp*2.3}:null;
   const band=top-sp*(S.showInt&&S.showName?5.2:3.8);
   g2.clearRect(0,0,W,H);
-  g2.strokeStyle=C["ink-faint"]; g2.lineWidth=1; for (let i=0;i<5;i++) { const y=Math.round(top+i*sp)+.5; g2.beginPath(); g2.moveTo(left,y); g2.lineTo(W-8,y); g2.stroke(); }
-  const cur=barAt(Math.max(now,0)); if (!cur) return;
+  g2.strokeStyle=C["ink-faint"]; g2.lineWidth=1;
+  for (const [lo,hi] of CLEF[clef].staves) for (let s=lo;s<=hi;s+=2) { const y=Math.round(yW(s))+.5; g2.beginPath(); g2.moveTo(left,y); g2.lineTo(W-8,y); g2.stroke(); }
+  const cur=cur0; if (!cur) return;
   const gutter=gutterFor(cur,sp), playX=gutter+sp*1.8, avail=W-playX-sp, ppb=Math.min(avail/2.5,Math.max(sp*2.7,avail/(+S.look)));
   const xOf=b=>playX+(b-now)*ppb, Z=Math.min(110,(W-playX)*.32), fall=calm.matches?0:sp*5;
   g2.save(); g2.beginPath(); g2.rect(gutter,0,W-gutter,H); g2.clip();
   const reveal=x=>{ const p=Math.min(1,Math.max(0,(W-8-x)/Z)), e=1-(1-p)**3; return {a:e,dy:-(1-e)*fall}; };
   for (const bar of score.bars) {
     const bx=xOf(bar.start);
-    if (bx>gutter+1&&bx<W) { const r=reveal(bx); g2.globalAlpha=r.a; g2.strokeStyle=C["ink-dim"]; g2.lineWidth=1.3; g2.beginPath(); g2.moveTo(bx-sp*.8,top); g2.lineTo(bx-sp*.8,top+4*sp); g2.stroke(); g2.globalAlpha=1; }
+    if (bx>gutter+1&&bx<W) { const r=reveal(bx); g2.globalAlpha=r.a; g2.strokeStyle=C["ink-dim"]; g2.lineWidth=1.3; g2.beginPath(); g2.moveTo(bx-sp*.8,top); g2.lineTo(bx-sp*.8,bot); g2.stroke(); g2.globalAlpha=1; }
     for (const it of bar.items) {
       const x=xOf(it.beat); if (x>W+sp*3||x+it.len*ppb<gutter-sp*3) continue;
       const r=reveal(x);
       if (it.rest) { const units=it.bar.den===4?[4,2,1]:[8,4,2,1]; let rem=it.len,b=it.beat; g2.globalAlpha=r.a;
-        while (rem>0) { const u=units.find(v=>v<=rem&&Number.isInteger((b-it.bar.start)/v))||1; drawRest(xOf(b)+sp*.6,cy+r.dy,sp,u/it.bar.den,C["ink-dim"]); rem-=u; b+=u; } g2.globalAlpha=1; }
-      else drawNote(it,x,cy,sp,r.a,r.dy,ppb,labels,now);
+        while (rem>0) { const u=units.find(v=>v<=rem&&Number.isInteger((b-it.bar.start)/v))||1; drawRest(xOf(b)+sp*.6,restY+r.dy,sp,u/it.bar.den,C["ink-dim"]); rem-=u; b+=u; } g2.globalAlpha=1; }
+      else drawNote(it,x,sp,r.a,r.dy,ppb,labels,now);
     }
   }
   // your voice
   const lk=cur.key, nowT=t; g2.lineWidth=Math.max(2.4,sp*.24); g2.lineCap="round"; g2.lineJoin="round"; g2.strokeStyle=C.accent;
   g2.beginPath(); let pen=false, prev=null;
   for (const s of trace) { if (s.m==null||s.m<30||s.m>96) { pen=false; prev=null; continue; }
-    const x=playX-(nowT-s.t)/T.spb*ppb; if (x<gutter-4) { pen=false; continue; } const y=yMidi(s.m,lk,cy,sp);
+    const x=playX-(nowT-s.t)/T.spb*ppb; if (x<gutter-4) { pen=false; continue; } const y=yMidi(s.m,lk);
     if (pen&&prev&&s.t-prev<.2) g2.lineTo(x,y); else g2.moveTo(x,y); pen=true; prev=s.t; }
   g2.stroke();
   // the now line
   g2.strokeStyle=C.accent; g2.lineWidth=1.5; g2.globalAlpha=.75; g2.beginPath(); g2.moveTo(playX,4); g2.lineTo(playX,H-4); g2.stroke(); g2.globalAlpha=1;
-  if (mic.midi!=null) { const m=fold(mic.midi,T.run?lastTarget:null); const y=yMidi(m,lk,cy,sp); const it=T.run?noteAt(now):null, ok=it&&!it.rest&&Math.abs((m-it.midi)*100)<=S.tol;
+  if (mic.midi!=null) { const m=fold(mic.midi,T.run?lastTarget:null); const y=yMidi(m,lk); const it=T.run?noteAt(now):null, ok=it&&!it.rest&&Math.abs((m-it.midi)*100)<=S.tol;
     g2.fillStyle=ok?C.good:C.accent; g2.beginPath(); g2.arc(playX,y,sp*.42,0,7); g2.fill(); }
   g2.restore();
-  drawSticky(cur,cy,sp,left);
+  drawSticky(cur,sp,left);
   if (rows&&band>sp*3) drawNext(now,playX+sp*1.2,band,sp);
   if (T.run&&now<0) { g2.font=`700 ${sp*3.4}px "Familjen Grotesk", sans-serif`; g2.fillStyle=C.accent; g2.textAlign="center"; g2.textBaseline="middle"; g2.fillText(Math.ceil(-now),playX,sp*2.4); g2.textBaseline="alphabetic"; }
 }
@@ -479,10 +526,150 @@ function hud() {
 let lastDetect=0;
 function frame() {
   if (ctx) { const t=ctx.currentTime;
-    if (mic.on&&t-lastDetect>=.03) { const dt=Math.min(.08,t-lastDetect); lastDetect=t; listen(t,dt); }
+    if (mic.on&&t-lastDetect>=.03) { const dt=Math.min(.08,t-lastDetect); lastDetect=t; listen(t,dt); if (RT.active) rtTick(t,dt); }
     if (T.run) settle(t); }
-  render(); hud(); requestAnimationFrame(frame);
+  if (!$("range").hidden) rtLive(); else if (!stage.hidden) { render(); hud(); }
+  requestAnimationFrame(frame);
 }
+
+/* ---------- range: keyboard strip, training section, range test ---------- */
+const KLO=36, KHI=84, NN=["C","C♯","D","E♭","E","F","F♯","G","A♭","A","B♭","B"];
+const mName=m=>NN[((m%12)+12)%12]+(Math.floor(m/12)-1);
+const isWhite=m=>[0,2,4,5,7,9,11].includes(((m%12)+12)%12);
+function keyGeom(w) {
+  const wh=[]; for (let m=KLO;m<=KHI;m++) if (isWhite(m)) wh.push(m);
+  const ww=w/wh.length, pos={}; wh.forEach((m,i)=>pos[m]=[i*ww,(i+1)*ww]);
+  for (let m=KLO;m<=KHI;m++) if (!isWhite(m)) { const x=pos[m-1][1]; pos[m]=[x-ww*.32,x+ww*.32]; }
+  return pos;
+}
+function midiAtX(x,w) { const pos=keyGeom(w); let best=KLO,bd=1e9; for (let m=KLO;m<=KHI;m++) { const d=Math.abs((pos[m][0]+pos[m][1])/2-x); if (d<bd) { bd=d; best=m; } } return best; }
+function drawKeys(c,o) {
+  const r=c.getBoundingClientRect(); if (!r.width||!C.ink) return;
+  const d=devicePixelRatio||1, w=r.width, h=r.height; if (c.width!==Math.round(w*d)||c.height!==Math.round(h*d)) { c.width=Math.round(w*d); c.height=Math.round(h*d); }
+  const g=c.getContext("2d"); g.setTransform(d,0,0,d,0,0); g.clearRect(0,0,w,h);
+  const pos=keyGeom(w), kh=h-24, inT=m=>o.tLo!=null&&m>=o.tLo&&m<=o.tHi;
+  for (let m=KLO;m<=KHI;m++) if (isWhite(m)) { const [a,b]=pos[m]; g.fillStyle=C.surface; g.fillRect(a,0,b-a,kh); if (inT(m)) { g.fillStyle=C["accent-soft"]; g.fillRect(a,0,b-a,kh); } g.strokeStyle=C.line; g.lineWidth=1; g.strokeRect(a+.5,.5,b-a-1,kh-1); }
+  for (let m=KLO;m<=KHI;m++) if (!isWhite(m)) { const [a,b]=pos[m]; g.fillStyle=C["ink-dim"]; g.fillRect(a,0,b-a,kh*.6); }
+  if (o.tLo!=null) { g.fillStyle=C.accent; g.globalAlpha=.55; g.fillRect(pos[o.tLo][0],kh+2,pos[o.tHi][1]-pos[o.tLo][0],4); g.globalAlpha=1; }
+  if (o.lo!=null) { const a=pos[o.lo][0], b=pos[o.hi][1];
+    g.fillStyle=C.accent; g.globalAlpha=.16; g.fillRect(a,0,b-a,kh); g.globalAlpha=1;
+    g.strokeStyle=C.accent; g.lineWidth=2.5; g.beginPath(); g.roundRect(a+1.25,1.25,b-a-2.5,kh-2.5,4); g.stroke();
+    for (const x of [a,b]) { g.beginPath(); g.roundRect(x-4,kh*.3,8,kh*.4,3); g.fill(); } }
+  if (o.mark!=null&&o.mark>=KLO&&o.mark<=KHI) { const [a,b]=pos[o.mark]; g.fillStyle=C.gold; g.beginPath(); g.arc((a+b)/2,(isWhite(o.mark)?kh*.82:kh*.45),Math.min(7,(b-a)*.35),0,7); g.fill(); }
+  if (o.you!=null&&o.you>=KLO-.5&&o.you<=KHI+.5) { const m=Math.round(o.you), [a,b]=pos[m]; g.strokeStyle=C.good; g.lineWidth=3; g.beginPath(); g.moveTo(a+2,kh-3); g.lineTo(b-2,kh-3); g.stroke(); }
+  g.font='500 10px "JetBrains Mono", monospace'; g.textAlign="center"; g.textBaseline="alphabetic";
+  for (let m=KLO;m<=KHI;m+=12) { g.fillStyle=m===60?C.ink:C["ink-faint"]; g.fillText(mName(m),(pos[m][0]+pos[m][1])/2,h-4); }
+}
+const userRange=()=>S.rangeLo!=null?[S.rangeLo,S.rangeHi]:VOICES_INIT[S.voice]||VOICES_INIT.tenor;
+function partRange(v) {
+  const [lo,hi]=userRange(), span=hi-lo, part=Math.max(5,Math.round(span*.45));
+  if (v==="low") return [lo,Math.min(hi,lo+part)];
+  if (v==="high") return [Math.max(lo,hi-part),hi];
+  if (v==="mid") { const c=(lo+hi)/2, half=Math.max(2.5,span*.225); return [Math.round(c-half),Math.round(c+half)]; }
+  return [lo,hi];
+}
+function setSection(lo,hi,commit) {
+  lo=Math.max(KLO,Math.min(KHI-5,lo)); hi=Math.min(KHI,Math.max(lo+5,hi));
+  S.lo=lo; S.hi=hi; updateRangeUI(); if (commit) { save(); rebuild(); }
+}
+function updateRangeUI() {
+  if (!$("keys")) return;
+  drawKeys($("keys"),{lo:S.lo,hi:S.hi,tLo:S.rangeLo,tHi:S.rangeHi});
+  const cl=S.clef==="auto"?CLEF_NAMES[autoClef(S.lo,S.hi)].toLowerCase()+" (auto)":CLEF_NAMES[S.clef].toLowerCase();
+  $("rTrain").innerHTML=`<span>Training <b>${mName(S.lo)} – ${mName(S.hi)}</b> · ${S.hi-S.lo} semitones · ${cl}</span>`;
+  $("rYours").textContent=S.rangeLo!=null?`Your tested range: ${mName(S.rangeLo)} – ${mName(S.rangeHi)}`:"Range not tested yet";
+  const eq=([a,b])=>a===S.lo&&b===S.hi;
+  document.querySelectorAll("#segPart button").forEach(b=>b.setAttribute("aria-pressed",eq(partRange(b.dataset.v))));
+  document.querySelectorAll("#segVoice button").forEach(b=>b.setAttribute("aria-pressed",eq(VOICES_INIT[b.dataset.v])));
+  document.querySelectorAll("#segClef button").forEach(b=>b.setAttribute("aria-pressed",b.dataset.v===S.clef));
+}
+function buildRangePanel(root) {
+  const p=document.createElement("section"); p.className="panel wide";
+  const seg=(id,o)=>`<div class="seg" role="group" id="${id}">${Object.entries(o).map(([v,n])=>`<button type="button" data-v="${v}">${n}</button>`).join("")}</div>`;
+  p.innerHTML=`<h2>Range</h2>
+    <canvas id="keys" class="keys" tabindex="0" aria-label="Keyboard. Drag the box or its edges to choose which notes to train. Arrow keys move it; Shift with arrows stretches it."></canvas>
+    <div class="rinfo"><span id="rTrain"></span><span id="rYours"></span></div>
+    <div class="rgrid">
+      <div class="ctl"><span class="lbl">Train part of your range</span>${seg("segPart",{low:"Low",mid:"Mid",high:"High",all:"All"})}</div>
+      <div class="ctl"><span class="lbl">Voice type</span>${seg("segVoice",{bass:"Bass",baritone:"Bari",tenor:"Tenor",alto:"Alto",soprano:"Sop"})}</div>
+      <div class="ctl"><span class="lbl">Clef</span>${seg("segClef",CLEF_NAMES)}</div>
+      <div class="ctl"><span class="lbl">Find your range</span><button class="btn" id="testBtn" type="button">Test my range</button></div>
+    </div>`;
+  root.prepend(p);
+  document.querySelectorAll("#segPart button").forEach(b=>b.onclick=()=>{ const [a,c]=partRange(b.dataset.v); setSection(a,c,true); });
+  document.querySelectorAll("#segVoice button").forEach(b=>b.onclick=()=>{ S.voice=b.dataset.v; const [a,c]=VOICES_INIT[S.voice]; setSection(a,c,true); });
+  document.querySelectorAll("#segClef button").forEach(b=>b.onclick=()=>{ S.clef=b.dataset.v; save(); rebuild(); updateRangeUI(); });
+  $("testBtn").onclick=()=>{ location.hash="range"; };
+  const k=$("keys"); let drag=null;
+  k.addEventListener("pointerdown",e=>{
+    const r=k.getBoundingClientRect(), x=e.clientX-r.left, pos=keyGeom(r.width), a=pos[S.lo][0], b=pos[S.hi][1], m=midiAtX(x,r.width);
+    drag=Math.abs(x-a)<14?{mode:"lo"}:Math.abs(x-b)<14?{mode:"hi"}:x>a&&x<b?{mode:"move",off:m-S.lo,len:S.hi-S.lo}:{mode:m<S.lo?"lo":"hi"};
+    k.setPointerCapture(e.pointerId); k.style.cursor="grabbing"; move(e);
+  });
+  const move=e=>{ if (!drag) return; const r=k.getBoundingClientRect(), m=midiAtX(e.clientX-r.left,r.width);
+    if (drag.mode==="lo") setSection(Math.min(m,S.hi-5),S.hi); else if (drag.mode==="hi") setSection(S.lo,Math.max(m,S.lo+5));
+    else { const lo=Math.max(KLO,Math.min(KHI-drag.len,m-drag.off)); setSection(lo,lo+drag.len); } };
+  k.addEventListener("pointermove",move);
+  const end=()=>{ if (!drag) return; drag=null; k.style.cursor=""; save(); rebuild(); };
+  k.addEventListener("pointerup",end); k.addEventListener("pointercancel",end);
+  k.addEventListener("keydown",e=>{ const d=e.key==="ArrowRight"?1:e.key==="ArrowLeft"?-1:0; if (!d) return; e.preventDefault();
+    if (e.shiftKey) setSection(S.lo,S.hi+d,true); else if (S.lo+d>=KLO&&S.hi+d<=KHI) setSection(S.lo+d,S.hi+d,true); });
+  new ResizeObserver(updateRangeUI).observe(k);
+  updateRangeUI();
+}
+
+const RT={active:false,phase:null};
+const RT_INTRO="It plays a note; you sing it back and hold it. Each note is a step higher until one is out of reach, then it goes down the same way. Sing full but don't strain. Takes about a minute.";
+const rtFound=()=>{ const lo=RT.lo??(RT.hi!=null?RT.start:null), hi=RT.hi??(RT.lo!=null?RT.start-2:null); return [lo,hi]; };
+async function rtBegin() {
+  if (T.run) stop(); audio();
+  if (!(await startMic())) { $("rtSay").textContent="The test needs the microphone. Allow it for this site in your browser's site settings, then press Begin again."; return; }
+  const [lo,hi]=userRange();
+  Object.assign(RT,{active:true,phase:"up",start:Math.round((lo+hi)/2),lo:null,hi:null,fails:0});
+  RT.target=RT.start; rtStep();
+}
+function rtStep() {
+  const t=ctx.currentTime+.08, hz=440*2**((RT.target-69)/12);
+  tone(hz,t,.9,.3,"triangle"); tone(hz*2,t,.9,.04,"sine");
+  RT.from=t+1.05; RT.until=RT.from+4; RT.good=0; rtUI();
+}
+function rtTick(t,dt) {
+  if (t<RT.from) return;
+  const m=mic.midi; if (m!=null&&Math.abs(m-RT.target)<=.5) RT.good+=dt;
+  if (RT.good>=.6) {
+    if (RT.phase==="up") RT.hi=Math.max(RT.hi??-1,RT.target); else RT.lo=Math.min(RT.lo??999,RT.target);
+    pting(); RT.fails=0; RT.target+=RT.phase==="up"?2:-2;
+    if (RT.target<KLO-4||RT.target>KHI+4) rtNextPhase(); else rtStep();
+  } else if (t>RT.until) { if (++RT.fails<2) rtStep(); else rtNextPhase(); }
+}
+function rtNextPhase() { if (RT.phase==="up") { RT.phase="down"; RT.fails=0; RT.target=RT.start-2; rtStep(); } else rtFinish(); }
+function rtFinish() {
+  RT.active=false; RT.phase="done"; const [lo,hi]=rtFound();
+  if (lo==null) $("rtSay").textContent="I couldn't hear you match any notes. Turn on the Tuner on the main screen to check the mic hears you, then try again.";
+  else {
+    S.rangeLo=Math.max(KLO,lo); S.rangeHi=Math.min(KHI,hi); setSection(S.rangeLo,S.rangeHi,true);
+    $("rtSay").textContent=`Your range: ${mName(lo)} to ${mName(hi)}, ${hi-lo} semitones. Exercises now use all of it. Narrow it to low, mid or high in Settings › Range.`;
+  }
+  rtUI();
+}
+function rtStop() { RT.active=false; RT.phase=null; $("rtSay").textContent=RT_INTRO; rtUI(); }
+function rtUI() {
+  $("rtTarget").textContent=RT.active?mName(RT.target):"–";
+  $("rtGo").textContent=RT.active?"Stop":RT.phase==="done"?"Test again":"Begin";
+  $("rtSkip").hidden=!RT.active; $("rtSkip").textContent=RT.phase==="up"?"That's my top":"That's my bottom";
+  if (RT.active) $("rtSay").textContent=(RT.phase==="up"?"Going up. ":"Going down. ")+"Listen, then sing it back and hold it until the bar fills.";
+}
+function rtLive() {
+  const m=mic.on?mic.midi:null;
+  $("rtYou").textContent=m==null?"–":mName(Math.round(m));
+  $("rtHold").style.width=(RT.active&&ctx&&ctx.currentTime>=RT.from?Math.min(1,RT.good/.6)*100:0)+"%";
+  const [lo,hi]=RT.phase?rtFound():[S.rangeLo,S.rangeHi];
+  drawKeys($("rtKeys"),{tLo:lo,tHi:hi,mark:RT.active?RT.target:null,you:m});
+}
+$("rtSay").textContent=RT_INTRO;
+$("rtGo").onclick=()=>RT.active?rtStop():rtBegin();
+$("rtSkip").onclick=()=>rtNextPhase();
+$("rtClose").onclick=()=>{ location.hash="setup"; };
 
 /* ---------- transport ---------- */
 function say(s) { $("msg").textContent=s; }
@@ -504,9 +691,13 @@ $("go").onclick=()=>T.run?stop():start();
 $("micBtn").onclick=async()=>{ if (mic.on) { if (!T.run) stopMic(); } else if (await startMic()) say("Tuner on. Sing and your voice draws across the staff."); };
 document.addEventListener("visibilitychange",()=>{ if (document.hidden&&T.run) stop(); });
 const stage=document.querySelector(".stage");
-function route() { const on=location.hash==="#setup"; $("setup").hidden=!on; stage.hidden=on; scrollTo(0,0); if (!on) requestAnimationFrame(size); }
+function route() {
+  const h=location.hash; $("setup").hidden=h!=="#setup"; $("range").hidden=h!=="#range"; stage.hidden=h==="#setup"||h==="#range";
+  if (h!=="#range"&&RT.active) rtStop();
+  scrollTo(0,0); requestAnimationFrame(()=>{ if (!stage.hidden) size(); updateRangeUI(); });
+}
 $("setBtn").onclick=()=>{ location.hash="setup"; };
-$("doneBtn").onclick=()=>{ if (history.state?.fromApp||document.referrer) history.back(); else location.hash=""; setTimeout(()=>{ if (location.hash==="#setup") location.hash=""; },60); };
+$("doneBtn").onclick=()=>{ location.hash=""; };
 addEventListener("hashchange",route); route();
 addEventListener("keydown",e=>{ if (e.code==="Space"&&!/SELECT|INPUT|BUTTON/.test(e.target.tagName)) { e.preventDefault(); $("go").click(); } });
 
@@ -540,7 +731,7 @@ function buildControls() {
     root.appendChild(p);
   }
 }
-buildControls(); T.spb=60/S.bpm; rebuild(); size();
+buildControls(); buildRangePanel($("groups")); T.spb=60/S.bpm; rebuild(); size();
 document.fonts.load(`32px ${FONT}`,"\u{1D11E}♯").catch(()=>{}).finally(()=>requestAnimationFrame(frame));
 window.__sightline={S,score,T,stats,mic,yin,spell,makeKey,get ctx(){return ctx;}};
 </script>

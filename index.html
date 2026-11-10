@@ -39,7 +39,8 @@ body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 var(
 header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; padding-block: .7rem; }
 h1 { font: 700 1.5rem/1 var(--font-display); letter-spacing: -.02em; margin: 0; }
 h1 span { color: var(--accent); }
-.transport { display: flex; gap: .5rem; }
+.transport { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .5rem; }
+@media (max-width: 460px) { .transport .btn { min-width: 0; padding-inline: .8rem; } }
 .btn { all: unset; cursor: pointer; font-weight: 700; padding: .55rem 1.2rem; border-radius: 8px; background: var(--accent); color: var(--accent-ink); text-align: center; min-width: 4.5rem; }
 .btn.ghost { background: transparent; color: var(--accent); box-shadow: inset 0 0 0 1px var(--line); }
 .btn[aria-pressed="true"].ghost { background: var(--accent-soft); }
@@ -79,6 +80,7 @@ input[type="range"] { width: 100%; accent-color: var(--accent); margin: .2rem 0;
     <header>
       <h1>Sight<span>line</span></h1>
       <div class="transport">
+        <button class="btn ghost" id="setBtn">Settings</button>
         <button class="btn ghost" id="micBtn" aria-pressed="false">Tuner</button>
         <button class="btn" id="go">Start</button>
       </div>
@@ -95,7 +97,10 @@ input[type="range"] { width: 100%; accent-color: var(--accent); margin: .2rem 0;
     </div>
     <p id="msg" role="status"></p>
   </div>
-  <div class="groups" id="groups"></div>
+  <section id="setup" hidden>
+    <header><h1>Settings</h1><button class="btn" id="doneBtn">Done</button></header>
+    <div class="groups" id="groups"></div>
+  </section>
 </div>
 
 <script>
@@ -388,10 +393,9 @@ function drawNote(it,x,cy,sp,alpha,dy,ppb,labelY,now) {
     if (val===.125) { const d=up?1:-1; g2.fillStyle=col; g2.beginPath(); g2.moveTo(sx,ey); g2.bezierCurveTo(sx+sp*.2,ey+d*sp*1.1,sx+sp*1.5,ey+d*sp*1.4,sx+sp*.95,ey+d*sp*2.6); g2.bezierCurveTo(sx+sp*1.2,ey+d*sp*1.5,sx+sp*.3,ey+d*sp*1.5,sx,ey+d*sp*1); g2.fill(); } }
   if (labelY) {
     const lc=it.hit?C.good:it.miss?C.bad:C.accent; g2.textAlign="center"; g2.textBaseline="alphabetic";
-    const fit=(t,max)=>Math.min(max,ppb*Math.max(1,it.len)*.92/(.62*[...t].length));
     if (S.showInt) { const t=it.interval==null?"":it.interval===0?"=":(it.interval>0?"↑":"↓")+Math.abs(it.interval);
-      const f=fit(t||"x",labelY.size); g2.font=`700 ${f}px "JetBrains Mono", "Sightline Music", monospace`; g2.fillStyle=lc; g2.fillText(t,x,labelY.int+dy*.4); }
-    if (S.showName) { const t=sp2.name, f=fit(t,labelY.size*(S.showInt?.72:1)); g2.font=`700 ${f}px "Familjen Grotesk", "Sightline Music", sans-serif`; g2.fillStyle=S.showInt?C.ink:lc; g2.globalAlpha=alpha*(S.showInt?.8:1); g2.fillText(t,x,labelY.name+dy*.4); g2.globalAlpha=alpha; }
+      g2.font=`700 ${sp*1.1}px "JetBrains Mono", "Sightline Music", monospace`; g2.fillStyle=lc; g2.fillText(t,x,labelY.int+dy*.4); }
+    if (S.showName) { g2.font=`700 ${sp*1.1}px "Familjen Grotesk", "Sightline Music", sans-serif`; g2.fillStyle=S.showInt?C["ink-dim"]:lc; g2.fillText(sp2.name,x,labelY.name+dy*.4); }
   }
   if (it.breath) { g2.font=`700 ${sp*2.2}px Georgia, serif`; g2.fillStyle=C["ink-dim"]; g2.textAlign="center"; g2.fillText(",",x+(it.len)*ppb-sp*.2,cy-sp*2.6+dy); }
   if (it.miss&&it.dev!=null) { g2.font=`500 ${sp*.8}px "JetBrains Mono", monospace`; g2.fillStyle=C.bad; g2.textAlign="center"; g2.fillText((it.dev>0?"+":"")+it.dev+"¢",x,cy+sp*5.1); }
@@ -400,18 +404,31 @@ function drawNote(it,x,cy,sp,alpha,dy,ppb,labelY,now) {
     if (age<1) { g2.globalAlpha=1-age; g2.strokeStyle=C.good; g2.lineWidth=2.5; g2.beginPath(); g2.arc(x,y,sp*(.9+age*2.6),0,7); g2.stroke();
       g2.font=`700 ${sp*1.1}px "JetBrains Mono", monospace`; g2.fillStyle=C.good; g2.textAlign="center"; g2.fillText("pting",x+sp*2.2,y-sp*(1+age*2)); g2.globalAlpha=1; } }
 }
+function nextNote(now) {
+  for (const bar of score.bars) for (const it of bar.items) if (!it.rest&&it.beat>now+.001) return it;
+  return null;
+}
+function drawNext(now,x,band,sp) {
+  const it=nextNote(T.run?now:-1); if (!it) return;
+  const size=Math.min(sp*6.5,band*.78,W*.17), y=band*.5+size*.36, parts=[];
+  if (S.showInt&&it.interval!=null) parts.push([it.interval===0?"=":(it.interval>0?"↑":"↓")+Math.abs(it.interval),`700 ${size}px "JetBrains Mono", "Sightline Music", monospace`,C.accent]);
+  if (S.showName||it.interval==null) parts.push([it.sp.name,`700 ${size}px "Familjen Grotesk", "Sightline Music", sans-serif`,S.showInt&&it.interval!=null?C.ink:C.accent]);
+  g2.textAlign="left"; g2.textBaseline="alphabetic";
+  g2.font=`500 ${Math.max(10,sp*.8)}px "JetBrains Mono", monospace`; g2.fillStyle=C["ink-faint"]; g2.fillText(it.interval==null?"FIRST NOTE":"NEXT",x,y-size*.86);
+  let cx=x; for (const [t,f,c] of parts) { g2.font=f; g2.fillStyle=c; g2.fillText(t,cx,y); cx+=g2.measureText(t).width+size*.35; }
+}
 function render() {
   if (!W) return;
   const t=ctx?ctx.currentTime:performance.now()/1000, now=T.run?beatAt(t):0;
   const rows=(S.showInt?1:0)+(S.showName?1:0);
-  const sp=Math.max(9,Math.min(H/(rows?24:15),W/30,16)), cy=rows?H-sp*6.5:H/2+sp*.5, top=cy-2*sp, left=8;
-  // big labels live in the band above the staff (and its upper ledger lines)
-  const band=top-sp*4.2, size=Math.min(sp*6.5,band/(rows===2?1.85:1.05));
-  const nameY=band+sp*1.2, labels=rows?{size,name:nameY,int:S.showName?nameY-size*.95:nameY}:null;
+  const sp=Math.max(9,Math.min(H/(rows?22:15),W/30,16)), cy=rows?H-sp*5.6:H/2+sp*.5, top=cy-2*sp, left=8;
+  // small labels ride over each note; the big "next note" readout sits in the band above them
+  const labels=rows?{int:top-sp*2.3,name:S.showInt?top-sp*3.7:top-sp*2.3}:null;
+  const band=top-sp*(S.showInt&&S.showName?5.2:3.8);
   g2.clearRect(0,0,W,H);
   g2.strokeStyle=C["ink-faint"]; g2.lineWidth=1; for (let i=0;i<5;i++) { const y=Math.round(top+i*sp)+.5; g2.beginPath(); g2.moveTo(left,y); g2.lineTo(W-8,y); g2.stroke(); }
   const cur=barAt(Math.max(now,0)); if (!cur) return;
-  const gutter=gutterFor(cur,sp), playX=gutter+sp*1.8, avail=W-playX-sp, ppb=Math.min(avail/2.5,Math.max(sp*2.7,avail/(+S.look),labels?labels.size*1.35:0));
+  const gutter=gutterFor(cur,sp), playX=gutter+sp*1.8, avail=W-playX-sp, ppb=Math.min(avail/2.5,Math.max(sp*2.7,avail/(+S.look)));
   const xOf=b=>playX+(b-now)*ppb, Z=Math.min(110,(W-playX)*.32), fall=calm.matches?0:sp*5;
   g2.save(); g2.beginPath(); g2.rect(gutter,0,W-gutter,H); g2.clip();
   const reveal=x=>{ const p=Math.min(1,Math.max(0,(W-8-x)/Z)), e=1-(1-p)**3; return {a:e,dy:-(1-e)*fall}; };
@@ -439,6 +456,7 @@ function render() {
     g2.fillStyle=ok?C.good:C.accent; g2.beginPath(); g2.arc(playX,y,sp*.42,0,7); g2.fill(); }
   g2.restore();
   drawSticky(cur,cy,sp,left);
+  if (rows&&band>sp*3) drawNext(now,playX+sp*1.2,band,sp);
   if (T.run&&now<0) { g2.font=`700 ${sp*3.4}px "Familjen Grotesk", sans-serif`; g2.fillStyle=C.accent; g2.textAlign="center"; g2.textBaseline="middle"; g2.fillText(Math.ceil(-now),playX,sp*2.4); g2.textBaseline="alphabetic"; }
 }
 function hud() {
@@ -485,6 +503,11 @@ function stop() {
 $("go").onclick=()=>T.run?stop():start();
 $("micBtn").onclick=async()=>{ if (mic.on) { if (!T.run) stopMic(); } else if (await startMic()) say("Tuner on. Sing and your voice draws across the staff."); };
 document.addEventListener("visibilitychange",()=>{ if (document.hidden&&T.run) stop(); });
+const stage=document.querySelector(".stage");
+function route() { const on=location.hash==="#setup"; $("setup").hidden=!on; stage.hidden=on; scrollTo(0,0); if (!on) requestAnimationFrame(size); }
+$("setBtn").onclick=()=>{ location.hash="setup"; };
+$("doneBtn").onclick=()=>{ if (history.state?.fromApp||document.referrer) history.back(); else location.hash=""; setTimeout(()=>{ if (location.hash==="#setup") location.hash=""; },60); };
+addEventListener("hashchange",route); route();
 addEventListener("keydown",e=>{ if (e.code==="Space"&&!/SELECT|INPUT|BUTTON/.test(e.target.tagName)) { e.preventDefault(); $("go").click(); } });
 
 /* ---------- controls ---------- */

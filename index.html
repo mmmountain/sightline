@@ -46,7 +46,7 @@ h1 span { color: var(--accent); }
 :is(.btn, select, input, .seg button):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .stage { background: var(--bg); padding-bottom: .6rem; }
 @media (min-height: 620px) { .stage { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; } }
-#score { display: block; width: 100%; height: clamp(220px, 42svh, 400px); background: var(--surface); border: 1px solid var(--line); border-radius: 10px 10px 0 0; border-bottom: 0; touch-action: pan-y; }
+#score { display: block; width: 100%; height: clamp(280px, 56svh, 600px); background: var(--surface); border: 1px solid var(--line); border-radius: 10px 10px 0 0; border-bottom: 0; touch-action: pan-y; }
 .hud { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .3rem 1rem; align-items: center; background: var(--surface); border: 1px solid var(--line); border-top: 1px solid var(--line); border-radius: 0 0 10px 10px; padding: .45rem .8rem; }
 .sung { font: 700 1.7rem/1.1 var(--font-display), sans-serif; min-width: 3.4rem; font-variant-numeric: tabular-nums; }
 .meter { position: relative; height: 34px; min-width: 0; }
@@ -102,9 +102,10 @@ input[type="range"] { width: 100%; accent-color: var(--accent); margin: .2rem 0;
 "use strict";
 /* ---------- settings ---------- */
 const DEFAULTS = { bpm:60, ts:"7/4", root:"F#", mode:"mixolydian", voice:"tenor", len:"1", phrase:"4", breath:"3", leap:"5",
-  labels:"int", look:"6", guideVol:45, guideLen:35, headphones:false, clickVol:25, ptingVol:50, tol:40, anyOct:true };
+  showInt:true, showName:false, look:"6", guideVol:45, guideLen:35, headphones:false, clickVol:25, ptingVol:50, tol:40, anyOct:true };
 const S = Object.assign({}, DEFAULTS);
 try { Object.assign(S, JSON.parse(localStorage.getItem("sightline.v1") || "{}")); } catch {}
+if (S.labels) { S.showInt=S.labels==="int"; S.showName=S.labels==="name"; delete S.labels; }
 const save = () => { try { localStorage.setItem("sightline.v1", JSON.stringify(S)); } catch {} };
 
 const MODES = {
@@ -133,7 +134,8 @@ const CONTROLS = [
     {k:"phrase",t:"seg",l:"Notes between breaths",o:{2:"2",3:"3",4:"4",6:"6",8:"8"}},
     {k:"breath",t:"seg",l:"Breath (beats of rest)",o:{0:"0",1:"1",2:"2",3:"3",4:"4"}},
     {k:"leap",t:"seg",l:"Largest leap (semitones)",o:{2:"2",3:"3",5:"5",7:"7",12:"12"}},
-    {k:"labels",t:"seg",l:"Over the notes",o:{int:"↑2 ↓3",name:"Names",none:"Nothing"},live:1},
+    {k:"showInt",t:"check",l:"Show the interval (↑2 ↓3)",live:1},
+    {k:"showName",t:"check",l:"Show the note name (F♯)",live:1},
     {k:"look",t:"seg",l:"Beats of look-ahead",o:{4:"4",6:"6",8:"8",12:"12"},live:1},
   ]],
   ["Sound", [
@@ -384,9 +386,12 @@ function drawNote(it,x,cy,sp,alpha,dy,ppb,labelY,now) {
   if (val<1) { const up=off<0, sx=x+(up?sp*.6:-sp*.6), ey=y+(up?-1:1)*sp*3.4;
     g2.strokeStyle=col; g2.lineWidth=Math.max(1.2,sp*.1); g2.beginPath(); g2.moveTo(sx,y); g2.lineTo(sx,ey); g2.stroke();
     if (val===.125) { const d=up?1:-1; g2.fillStyle=col; g2.beginPath(); g2.moveTo(sx,ey); g2.bezierCurveTo(sx+sp*.2,ey+d*sp*1.1,sx+sp*1.5,ey+d*sp*1.4,sx+sp*.95,ey+d*sp*2.6); g2.bezierCurveTo(sx+sp*1.2,ey+d*sp*1.5,sx+sp*.3,ey+d*sp*1.5,sx,ey+d*sp*1); g2.fill(); } }
-  if (S.labels!=="none") {
-    const text=S.labels==="name"?sp2.name:it.interval==null?"start":it.interval===0?"=":(it.interval>0?"↑":"↓")+Math.abs(it.interval);
-    g2.font=`700 ${sp*(text==="start"?.8:1.1)}px "JetBrains Mono", "Sightline Music", monospace`; g2.fillStyle=it.hit?C.good:it.miss?C.bad:C.accent; g2.textAlign="center"; g2.fillText(text,x,labelY+dy*.4);
+  if (labelY) {
+    const lc=it.hit?C.good:it.miss?C.bad:C.accent; g2.textAlign="center"; g2.textBaseline="alphabetic";
+    const fit=(t,max)=>Math.min(max,ppb*Math.max(1,it.len)*.92/(.62*[...t].length));
+    if (S.showInt) { const t=it.interval==null?"":it.interval===0?"=":(it.interval>0?"↑":"↓")+Math.abs(it.interval);
+      const f=fit(t||"x",labelY.size); g2.font=`700 ${f}px "JetBrains Mono", "Sightline Music", monospace`; g2.fillStyle=lc; g2.fillText(t,x,labelY.int+dy*.4); }
+    if (S.showName) { const t=sp2.name, f=fit(t,labelY.size*(S.showInt?.72:1)); g2.font=`700 ${f}px "Familjen Grotesk", "Sightline Music", sans-serif`; g2.fillStyle=S.showInt?C.ink:lc; g2.globalAlpha=alpha*(S.showInt?.8:1); g2.fillText(t,x,labelY.name+dy*.4); g2.globalAlpha=alpha; }
   }
   if (it.breath) { g2.font=`700 ${sp*2.2}px Georgia, serif`; g2.fillStyle=C["ink-dim"]; g2.textAlign="center"; g2.fillText(",",x+(it.len)*ppb-sp*.2,cy-sp*2.6+dy); }
   if (it.miss&&it.dev!=null) { g2.font=`500 ${sp*.8}px "JetBrains Mono", monospace`; g2.fillStyle=C.bad; g2.textAlign="center"; g2.fillText((it.dev>0?"+":"")+it.dev+"¢",x,cy+sp*5.1); }
@@ -398,11 +403,15 @@ function drawNote(it,x,cy,sp,alpha,dy,ppb,labelY,now) {
 function render() {
   if (!W) return;
   const t=ctx?ctx.currentTime:performance.now()/1000, now=T.run?beatAt(t):0;
-  const sp=Math.max(9,Math.min(H/15,W/30,16)), cy=H/2+sp*.5, top=cy-2*sp, left=8;
+  const rows=(S.showInt?1:0)+(S.showName?1:0);
+  const sp=Math.max(9,Math.min(H/(rows?24:15),W/30,16)), cy=rows?H-sp*6.5:H/2+sp*.5, top=cy-2*sp, left=8;
+  // big labels live in the band above the staff (and its upper ledger lines)
+  const band=top-sp*4.2, size=Math.min(sp*6.5,band/(rows===2?1.85:1.05));
+  const nameY=band+sp*1.2, labels=rows?{size,name:nameY,int:S.showName?nameY-size*.95:nameY}:null;
   g2.clearRect(0,0,W,H);
   g2.strokeStyle=C["ink-faint"]; g2.lineWidth=1; for (let i=0;i<5;i++) { const y=Math.round(top+i*sp)+.5; g2.beginPath(); g2.moveTo(left,y); g2.lineTo(W-8,y); g2.stroke(); }
   const cur=barAt(Math.max(now,0)); if (!cur) return;
-  const gutter=gutterFor(cur,sp), playX=gutter+sp*1.8, ppb=Math.max(sp*2.7,(W-playX-sp)/(+S.look));
+  const gutter=gutterFor(cur,sp), playX=gutter+sp*1.8, avail=W-playX-sp, ppb=Math.min(avail/2.5,Math.max(sp*2.7,avail/(+S.look),labels?labels.size*1.35:0));
   const xOf=b=>playX+(b-now)*ppb, Z=Math.min(110,(W-playX)*.32), fall=calm.matches?0:sp*5;
   g2.save(); g2.beginPath(); g2.rect(gutter,0,W-gutter,H); g2.clip();
   const reveal=x=>{ const p=Math.min(1,Math.max(0,(W-8-x)/Z)), e=1-(1-p)**3; return {a:e,dy:-(1-e)*fall}; };
@@ -414,7 +423,7 @@ function render() {
       const r=reveal(x);
       if (it.rest) { const units=it.bar.den===4?[4,2,1]:[8,4,2,1]; let rem=it.len,b=it.beat; g2.globalAlpha=r.a;
         while (rem>0) { const u=units.find(v=>v<=rem&&Number.isInteger((b-it.bar.start)/v))||1; drawRest(xOf(b)+sp*.6,cy+r.dy,sp,u/it.bar.den,C["ink-dim"]); rem-=u; b+=u; } g2.globalAlpha=1; }
-      else drawNote(it,x,cy,sp,r.a,r.dy,ppb,top-sp*2.15,now);
+      else drawNote(it,x,cy,sp,r.a,r.dy,ppb,labels,now);
     }
   }
   // your voice
